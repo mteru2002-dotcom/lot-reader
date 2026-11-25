@@ -29,6 +29,15 @@ main{max-width:1240px;margin:0 auto;padding:20px max(4vw,16px) 60px}
 .stage canvas{max-width:100%;max-height:62vh;display:block}
 .stage .empty{text-align:center;color:var(--mute);padding:30px;font-size:15px}
 .stage .empty svg{display:block;margin:0 auto 10px}
+#ov{position:absolute;pointer-events:none}
+.wb{position:absolute;pointer-events:auto;min-height:0;padding:0;border:2px solid rgba(255,255,255,.85);background:rgba(242,194,0,.12);border-radius:4px;box-shadow:0 0 0 1px rgba(0,0,0,.5);cursor:pointer}
+.wb span{position:absolute;left:-2px;bottom:100%;margin-bottom:3px;background:rgba(20,20,20,.82);color:#fff;font:700 13px/1.3 "JetBrains Mono",monospace;padding:1px 6px;border-radius:4px;white-space:nowrap}
+.wb.lo span{bottom:auto;top:100%;margin:3px 0 0}
+.wb.best{border:3px solid var(--y);background:rgba(242,194,0,.28);box-shadow:0 0 0 2px #1d1f21,0 0 18px var(--y);animation:blink .45s ease-in-out 6 alternate}
+.wb.best span{background:var(--y);color:#1d1f21;font-size:16px}
+@keyframes blink{from{opacity:1}to{opacity:.15}}
+.stage.scan::after{content:"";position:absolute;left:0;right:0;height:3px;background:var(--y);box-shadow:0 0 14px 4px var(--y);animation:sweep 1.4s linear infinite;pointer-events:none}
+@keyframes sweep{from{top:0}to{top:100%}}
 #box{position:absolute;border:3px solid var(--y);box-shadow:0 0 0 9999px rgba(0,0,0,.35);border-radius:4px;display:none;pointer-events:none}
 .row{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}
 button,.btn{font:inherit;font-weight:700;min-height:48px;padding:0 18px;border-radius:10px;border:2px solid var(--ink);background:var(--card);color:var(--ink);cursor:pointer;display:inline-flex;align-items:center;gap:8px}
@@ -86,7 +95,7 @@ td .del{min-height:40px;padding:0 12px;border-width:1px;font-weight:400}
 .note{font-size:13px;color:var(--mute);margin-top:18px}
 #toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:10px 18px;border-radius:24px;font-size:15px;opacity:0;transition:opacity .2s;pointer-events:none}
 #toast.on{opacity:1}
-@media(prefers-reduced-motion:reduce){*{transition:none!important}}
+@media(prefers-reduced-motion:reduce){*{transition:none!important}.wb.best,.stage.scan::after{animation:none}}
 @media(max-width:600px){table{font-size:13px}.stack thead{display:none}.stack tr{display:grid;padding-block:10px;border-bottom:1px solid var(--line)}.stack td{display:flow-root;border:0;padding:3px 12px;padding-inline-start:7.5em;text-align:start}.stack td::before{content:attr(data-l);float:inline-start;width:6.5em;margin-inline-start:-6.5em;font-size:12px;color:var(--mute)}.stack td:empty{display:none}}
 </style>
 <script>new MutationObserver(()=>{for(const c of document.querySelectorAll('.stack td:not([data-l])')){let i=0,p=c;while(p=p.previousElementSibling)i+=p.colSpan;c.dataset.l=c.closest('table').rows[0].cells[i]?.textContent||''}}).observe(document,{childList:true,subtree:true})</script>
@@ -103,6 +112,7 @@ td .del{min-height:40px;padding:0 12px;border-width:1px;font-weight:400}
       </div>
       <canvas id="cv" hidden></canvas>
       <div id="box"></div>
+      <div id="ov" hidden></div>
     </div>
     <div class="row">
       <label class="btn pri" style="margin:0">撮影する<input type="file" id="cam" accept="image/*" capture="environment"></label>
@@ -136,7 +146,6 @@ td .del{min-height:40px;padding:0 12px;border-width:1px;font-weight:400}
         <div><label for="life" id="lifeLbl">有効期間（製造から）</label><div class="unit"><input type="number" id="life" inputmode="numeric" min="0" max="240" placeholder="未設定"><span>か月</span></div></div>
         <div id="life2Box"><label for="life2">硬化剤の有効期間</label><div class="unit"><input type="number" id="life2" inputmode="numeric" min="0" max="240" placeholder="主剤と同じ"><span>か月</span></div></div>
       </div>
-      <div class="row"><button type="button" id="rmK">この材料を一覧から外す</button></div>
     </details>
     <label class="chk big" id="twoRow"><input type="checkbox" id="two">2液性（主剤と硬化剤のロットを別々に記録）</label>
     <div class="slots" id="slots">
@@ -202,7 +211,6 @@ function applyKind(){
   const k=cur();store.set('lot.kind',k.n);
   $('twoRow').hidden=!k.can;$('two').checked=!!(k.can&&k.two);
   $('fmt').value=k.fmt||'';$('life').value=k.life??'';$('life2').value=k.life2??'';
-  $('rmK').disabled=kinds.length<=1;
   setTwo();
 }
 function ksum(){
@@ -235,14 +243,6 @@ function addKind(){
 }
 $('addOk').onclick=addKind;
 $('newK').onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();addKind()}};
-let rmPend=false;
-$('rmK').onclick=()=>{
-  if(kinds.length<=1)return;
-  const k=cur();
-  if(!rmPend){rmPend=true;$('rmK').textContent='もう一度押すと外します';setTimeout(()=>{rmPend=false;$('rmK').textContent='この材料を一覧から外す'},2500);return}
-  rmPend=false;$('rmK').textContent='この材料を一覧から外す';
-  kinds=kinds.filter(x=>x!==k);saveKinds();renderKinds();toast('「'+k.n+'」を外しました（記録は残ります）');
-};
 
 /* --- slots --- */
 function setAct(i){act=i;document.querySelectorAll('.slot').forEach(el=>el.classList.toggle('on',+el.dataset.s===i));showBig()}
@@ -260,7 +260,7 @@ function load(file){
     const M=2000,s=Math.min(1,M/Math.max(im.width,im.height));
     cv.width=Math.round(im.width*s);cv.height=Math.round(im.height*s);
     ctx.drawImage(im,0,0,cv.width,cv.height);URL.revokeObjectURL(url);
-    img=true;sel=null;box.style.display='none';cv.hidden=false;$('empty').hidden=true;
+    img=true;sel=null;clearHits();box.style.display='none';cv.hidden=false;$('empty').hidden=true;
     $('again').disabled=false;$('clearBox').disabled=true;
     const t=document.createElement('canvas'),ts=240/Math.max(cv.width,cv.height);
     t.width=Math.round(cv.width*ts);t.height=Math.round(cv.height*ts);t.getContext('2d').drawImage(cv,0,0,t.width,t.height);
@@ -276,7 +276,7 @@ $('pick').onchange=e=>{load(e.target.files[0]);e.target.value=''};
 /* --- region select --- */
 let drag=null;
 function rel(e){const r=cv.getBoundingClientRect();return{x:Math.max(0,Math.min(r.width,e.clientX-r.left)),y:Math.max(0,Math.min(r.height,e.clientY-r.top)),r}}
-stage.addEventListener('pointerdown',e=>{if(!img)return;drag=rel(e);sel=null;stage.setPointerCapture(e.pointerId)});
+stage.addEventListener('pointerdown',e=>{if(!img||busy)return;drag=rel(e);sel=null;clearHits();stage.setPointerCapture(e.pointerId)});
 stage.addEventListener('pointermove',e=>{if(!drag)return;const p=rel(e),r=drag.r,sr=stage.getBoundingClientRect();
   const x=Math.min(drag.x,p.x),y=Math.min(drag.y,p.y),w=Math.abs(p.x-drag.x),h=Math.abs(p.y-drag.y);
   Object.assign(box.style,{display:'block',left:(r.left-sr.left+x)+'px',top:(r.top-sr.top+y)+'px',width:w+'px',height:h+'px'});
@@ -308,39 +308,113 @@ function barcode(){
   return null;
 }
 
-/* --- OCR --- */
+/* --- OCR（2段階：①全体から番号らしい行を探す → ②その行だけ切り出して二値化して読み直す） --- */
 let worker=null;
 async function getWorker(){
   if(worker)return worker;
   const base=new URL('./',location.href).href;
   worker=await Tesseract.createWorker('eng',1,{
     workerPath:base+'worker.min.js',corePath:base,langPath:base.replace(/\/$/,''),workerBlobURL:false,
-    logger:m=>{if(m.status&&m.progress!=null)status(({'loading tesseract core':'文字認識の準備中','loading language traineddata':'辞書を読み込み中','initializing api':'初期化中','recognizing text':'文字を読み取り中'})[m.status]||m.status,m.progress)}
+    logger:m=>{if(m.status&&m.progress!=null&&m.status!=='recognizing text')status(({'loading tesseract core':'文字認識の準備中','loading language traineddata':'辞書を読み込み中','initializing api':'初期化中'})[m.status]||m.status,m.progress)}
   });
-  await worker.setParameters({tessedit_char_whitelist:'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-/.#'});
+  // 小文字と空白も許可しないと単語の区切りが崩れ、確からしさも0になるため含める（結果は大文字に変換）
+  await worker.setParameters({tessedit_char_whitelist:'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-/.#: '});
   return worker;
 }
-function prep(){
-  const s=sel||{w:cv.width,h:cv.height};
-  const scale=Math.min(3,Math.max(1,900/Math.max(s.w,1)));
-  const c=region(scale),g=c.getContext('2d'),d=g.getImageData(0,0,c.width,c.height),a=d.data;
-  let mn=255,mx=0;for(let i=0;i<a.length;i+=4){const v=a[i]*.3+a[i+1]*.59+a[i+2]*.11;a[i]=v;if(v<mn)mn=v;if(v>mx)mx=v}
-  const k=255/Math.max(1,mx-mn);for(let i=0;i<a.length;i+=4){const v=(a[i]-mn)*k;a[i]=a[i+1]=a[i+2]=v}
-  g.putImageData(d,0,0);return c;
+// cv上の矩形rを、文字の高さが約48pxになるよう拡大して切り出す。mode: 'gray' | 'bin' | 'inv'
+function crop(r,mode,target){
+  const scale=Math.min(4,Math.max(.5,(target||48)/Math.max(8,r.lh||r.h)));
+  const c=document.createElement('canvas');c.width=Math.max(1,Math.round(r.w*scale));c.height=Math.max(1,Math.round(r.h*scale));
+  const g=c.getContext('2d',{willReadFrequently:true});g.imageSmoothingQuality='high';g.drawImage(cv,r.x,r.y,r.w,r.h,0,0,c.width,c.height);
+  const d=g.getImageData(0,0,c.width,c.height),a=d.data,n=a.length/4,hist=new Array(256).fill(0);
+  let mn=255,mx=0;
+  for(let i=0;i<a.length;i+=4){const v=a[i]*.3+a[i+1]*.59+a[i+2]*.11;a[i]=v;if(v<mn)mn=v;if(v>mx)mx=v}
+  const k=255/Math.max(1,mx-mn);
+  for(let i=0;i<a.length;i+=4){const v=Math.round((a[i]-mn)*k);a[i]=v;hist[v]++}
+  let th=128;
+  if(mode!=='gray'){ // 大津の二値化
+    let sum=0;for(let t=0;t<256;t++)sum+=t*hist[t];
+    let sB=0,wB=0,best=0;for(let t=0;t<256;t++){wB+=hist[t];if(!wB)continue;const wF=n-wB;if(!wF)break;sB+=t*hist[t];const mB=sB/wB,mF=(sum-sB)/wF,b=wB*wF*(mB-mF)**2;if(b>best){best=b;th=t}}
+  }
+  for(let i=0;i<a.length;i+=4){let v=a[i];if(mode!=='gray')v=v>th?255:0;if(mode==='inv')v=255-v;a[i]=a[i+1]=a[i+2]=v}
+  g.putImageData(d,0,0);
+  return {c,scale};
+}
+const toCv=(b,r,scale)=>({x:r.x+b.x0/scale,y:r.y+b.y0/scale,w:(b.x1-b.x0)/scale,h:(b.y1-b.y0)/scale});
+const pad=(b,p)=>{const x=Math.max(0,b.x-b.h*p),y=Math.max(0,b.y-b.h*p*.8),x2=Math.min(cv.width,b.x+b.w+b.h*p),y2=Math.min(cv.height,b.y+b.h*(1+p*.8));return{x,y,w:x2-x,h:y2-y,lh:b.h}};
+// 「LOT No.」「No.」などの見出しを取り除く
+function strip(t){
+  const m=t.match(/^(?:L[O0]T|N[O0])(?:[.#:\-]?N[O0]?)?[.#:\-]*/);
+  if(!m||!m[0])return t;
+  const r=t.slice(m[0].length);
+  if(r.length>=3&&/\d/.test(r)&&(/[.#:\-]$/.test(m[0])||/^\d/.test(r)))return r;
+  return t;
+}
+const clean=t=>strip(t.trim().toUpperCase().replace(/^[-/.#:]+|[-/.#:]+$/g,'')).replace(/^[-/.#:]+/,'');
+async function readLine(w,r){
+  // 方式（濃淡そのまま／白黒二値化）×文字の大きさ（2通り）で読み、結果を投票で集計する
+  const out=[];
+  for(const mode of ['gray','bin'])for(const tg of [32,42]){
+    const {c,scale}=crop(r,mode,tg);
+    const {data}=await w.recognize(c);
+    out.push(...(data.words||[]).map(x=>({t:clean(x.text),c:x.confidence||0,b:toCv(x.bbox,r,scale)})).filter(x=>x.t.length>=3&&/\d/.test(x.t)));
+  }
+  return out;
 }
 async function ocr(){
   const w=await getWorker();
-  await w.setParameters({tessedit_pageseg_mode:sel?'7':'11'});
-  const {data}=await w.recognize(prep());
-  const words=(data.words||[]).map(x=>({t:x.text.trim(),c:x.confidence})).filter(x=>x.t.length>=3);
-  words.sort((a,b)=>score(b)-score(a));
-  return words;
+  let lines,first=[];
+  if(sel){
+    lines=[{...sel,lh:sel.h*.6}];
+  }else{
+    status('番号らしい行を探しています',0.3);
+    await w.setParameters({tessedit_pageseg_mode:'11'});
+    const full={x:0,y:0,w:cv.width,h:cv.height};
+    const {c,scale}=crop({...full,lh:Math.max(cv.width,cv.height)/40},'gray',30);
+    const {data}=await w.recognize(c);
+    first=(data.words||[]).map(x=>({t:clean(x.text),c:x.confidence||0,b:toCv(x.bbox,full,scale)})).filter(x=>x.t.length>=3&&/\d/.test(x.t));
+    first.sort((a,b)=>score(b)-score(a));
+    lines=[];
+    for(const x of first){ // 近い位置の候補は同じ行として扱う
+      if(lines.some(l=>Math.abs((l.y+l.h/2)-(x.b.y+x.b.h/2))<x.b.h*.7&&x.b.x<l.x+l.w&&x.b.x+x.b.w>l.x))continue;
+      lines.push(pad(x.b,.6));if(lines.length>=2)break;
+    }
+  }
+  await w.setParameters({tessedit_pageseg_mode:'7'});
+  let all=first.slice();
+  for(let i=0;i<lines.length;i++){status(`読み取り中（${i+1}/${lines.length}）`,0.4+0.6*i/lines.length);all.push(...await readLine(w,lines[i]))}
+  // 同じ文字列をまとめ、読めた回数（票）と最高の確からしさで並べる
+  const m=new Map();
+  for(const x of all){const p=m.get(x.t);if(!p)m.set(x.t,{...x,v:1});else{p.v++;if(x.c>p.c){p.c=x.c;p.b=x.b}}}
+  return [...m.values()].sort((a,b)=>score(b)-score(a));
 }
-function score(w){const t=w.t,re=fmtRe();let s=w.c;if(/\d/.test(t))s+=15;if(/[A-Z]/.test(t)&&/\d/.test(t))s+=10;s+=Math.min(t.length,12)*2;if(re&&re.test(t))s+=60;if(re&&re.test(t)&&mfg(t))s+=20;return s}
+function score(w){const t=w.t,re=fmtRe();let s=w.c+(w.v?Math.min(w.v,5)*12:0);if(/\d/.test(t))s+=15;if(/[A-Z]/.test(t)&&/\d/.test(t))s+=10;s+=Math.min(t.length,12)*2;if(re&&re.test(t))s+=60;if(re&&re.test(t)&&mfg(t))s+=20;return s}
+
+/* --- 写真の上に読み取った文字を重ねる --- */
+const ov=$('ov');let hits=[];
+function placeOv(){
+  if(cv.hidden){ov.hidden=true;return}
+  const r=cv.getBoundingClientRect(),s=stage.getBoundingClientRect();
+  Object.assign(ov.style,{left:(r.left-s.left)+'px',top:(r.top-s.top)+'px',width:r.width+'px',height:r.height+'px'});ov.hidden=false;
+}
+const roOv=new ResizeObserver(placeOv);roOv.observe(stage);
+function drawHits(list,pick){
+  // 重なる枠は、上位（より確からしい）ものだけ表示する
+  const ov2=(a,b)=>{const w=Math.min(a.x+a.w,b.x+b.w)-Math.max(a.x,b.x),h=Math.min(a.y+a.h,b.y+b.h)-Math.max(a.y,b.y);return w>0&&h>0&&w*h>.3*Math.min(a.w*a.h,b.w*b.h)};
+  hits=[];for(const h of list){if(h.b&&!hits.some(k=>ov2(k.b,h.b)))hits.push(h);if(hits.length>=6)break}
+  placeOv();
+  ov.innerHTML=hits.map((h,i)=>{const b=h.b;
+    return `<button type="button" class="wb${i===pick?' best':''}${b.y/cv.height<.08?' lo':''}" data-i="${i}" style="left:${b.x/cv.width*100}%;top:${b.y/cv.height*100}%;width:${b.w/cv.width*100}%;height:${b.h/cv.height*100}%" aria-label="${esc(h.t)}を使う"><span>${esc(h.t)}</span></button>`}).join('');
+}
+function clearHits(){hits=[];ov.innerHTML=''}
+ov.addEventListener('pointerdown',e=>e.stopPropagation());
+ov.addEventListener('click',e=>{const b=e.target.closest('.wb');if(!b)return;const h=hits[+b.dataset.i];if(!h)return;
+  ov.querySelectorAll('.wb').forEach(x=>x.classList.toggle('best',x===b));
+  $('code'+act).value=h.t;slots[act].via='ocr';slots[act].img=thumb;lastMsg=(slotName(act)?slotName(act)+'：':'')+`写真の文字を選択（確からしさ ${Math.round(h.c)}%）`;update()});
 
 let busy=false;
 async function run(redo){
-  if(!img||busy)return;busy=true;$('again').disabled=true;
+  if(!img||busy)return;busy=true;$('again').disabled=true;stage.classList.add('scan');clearHits();
   const i=act;
   try{
     status('バーコードを探しています',0.1);
@@ -349,10 +423,11 @@ async function run(redo){
     const ws=await ocr();
     if(!ws.length){$('via').textContent='文字が見つかりませんでした。番号の部分をなぞって範囲を絞ってください';status('文字が見つかりませんでした');return}
     const top=ws[0];
+    drawHits(ws,0);
     put(i,top.t,`文字認識で読み取り（確からしさ ${Math.round(top.c)}%）`,ws.slice(1,6).map(x=>x.t),'ocr',redo);
-    status(sel?'選んだ範囲を読み取りました':'全体を読み取りました。違う場合は番号をなぞってください');
+    status('点滅している枠が読み取った番号です。違うときは他の枠をタップするか、番号をなぞってください');
   }catch(e){console.error(e);status('読み取りに失敗しました：'+(e&&e.message||e));}
-  finally{busy=false;$('again').disabled=false}
+  finally{busy=false;$('again').disabled=false;stage.classList.remove('scan')}
 }
 
 /* --- lot rule → 製造日・有効期限 --- */
