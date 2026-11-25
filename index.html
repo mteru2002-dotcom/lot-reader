@@ -260,7 +260,7 @@ function load(file){
     const M=2000,s=Math.min(1,M/Math.max(im.width,im.height));
     cv.width=Math.round(im.width*s);cv.height=Math.round(im.height*s);
     ctx.drawImage(im,0,0,cv.width,cv.height);URL.revokeObjectURL(url);
-    img=true;sel=null;clearHits();box.style.display='none';cv.hidden=false;$('empty').hidden=true;
+    img=true;sel=null;deskewed=false;clearHits();box.style.display='none';cv.hidden=false;$('empty').hidden=true;
     $('again').disabled=false;$('clearBox').disabled=true;
     const t=document.createElement('canvas'),ts=240/Math.max(cv.width,cv.height);
     t.width=Math.round(cv.width*ts);t.height=Math.round(cv.height*ts);t.getContext('2d').drawImage(cv,0,0,t.width,t.height);
@@ -321,26 +321,72 @@ async function getWorker(){
   await worker.setParameters({tessedit_char_whitelist:'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-/.#: '});
   return worker;
 }
-// cv上の矩形rを、文字の高さが約48pxになるよう拡大して切り出す。mode: 'gray' | 'bin' | 'inv'
-function crop(r,mode,target){
+// cv上の矩形rを切り出す。文字の高さが約targetピクセルになるよう拡大し、ang（度）だけ傾きを戻す。
+// mode: 'gray'（濃淡）| 'bin'（白黒）| 'dot'（ぼかしてから白黒：ドット文字・かすれ用）
+function crop(r,mode,target,ang){
+  ang=ang||0;
   const scale=Math.min(4,Math.max(.5,(target||48)/Math.max(8,r.lh||r.h)));
   const c=document.createElement('canvas');c.width=Math.max(1,Math.round(r.w*scale));c.height=Math.max(1,Math.round(r.h*scale));
-  const g=c.getContext('2d',{willReadFrequently:true});g.imageSmoothingQuality='high';g.drawImage(cv,r.x,r.y,r.w,r.h,0,0,c.width,c.height);
+  const g=c.getContext('2d',{willReadFrequently:true});g.imageSmoothingQuality='high';
+  g.fillStyle='#fff';g.fillRect(0,0,c.width,c.height);
+  g.save();g.translate(c.width/2,c.height/2);g.rotate(-ang*Math.PI/180);g.scale(scale,scale);
+  if(mode==='dot')g.filter='blur('+Math.max(.6,1.1*scale)+'px)';
+  g.drawImage(cv,-(r.x+r.w/2),-(r.y+r.h/2));g.restore();
   const d=g.getImageData(0,0,c.width,c.height),a=d.data,n=a.length/4,hist=new Array(256).fill(0);
   let mn=255,mx=0;
   for(let i=0;i<a.length;i+=4){const v=a[i]*.3+a[i+1]*.59+a[i+2]*.11;a[i]=v;if(v<mn)mn=v;if(v>mx)mx=v}
   const k=255/Math.max(1,mx-mn);
   for(let i=0;i<a.length;i+=4){const v=Math.round((a[i]-mn)*k);a[i]=v;hist[v]++}
-  let th=128;
-  if(mode!=='gray'){ // 大津の二値化
-    let sum=0;for(let t=0;t<256;t++)sum+=t*hist[t];
-    let sB=0,wB=0,best=0;for(let t=0;t<256;t++){wB+=hist[t];if(!wB)continue;const wF=n-wB;if(!wF)break;sB+=t*hist[t];const mB=sB/wB,mF=(sum-sB)/wF,b=wB*wF*(mB-mF)**2;if(b>best){best=b;th=t}}
-  }
-  for(let i=0;i<a.length;i+=4){let v=a[i];if(mode!=='gray')v=v>th?255:0;if(mode==='inv')v=255-v;a[i]=a[i+1]=a[i+2]=v}
+  const th=otsu(hist,n);
+  for(let i=0;i<a.length;i+=4){let v=a[i];if(mode!=='gray')v=v>th?255:0;a[i]=a[i+1]=a[i+2]=v}
   g.putImageData(d,0,0);
-  return {c,scale};
+  return {c,scale,ang,r};
 }
-const toCv=(b,r,scale)=>({x:r.x+b.x0/scale,y:r.y+b.y0/scale,w:(b.x1-b.x0)/scale,h:(b.y1-b.y0)/scale});
+function otsu(hist,n){let sum=0;for(let t=0;t<256;t++)sum+=t*hist[t];let sB=0,wB=0,best=0,th=128;
+  for(let t=0;t<256;t++){wB+=hist[t];if(!wB)continue;const wF=n-wB;if(!wF)break;sB+=t*hist[t];const mB=sB/wB,mF=(sum-sB)/wF,b=wB*wF*(mB-mF)**2;if(b>best){best=b;th=t}}return th}
+// 切り出し画像上の枠を、写真（cv）上の位置に戻す（傾きを戻した分も考慮）
+function toCv(b,k){const {r,scale,ang}=k,cx=(b.x0+b.x1)/2-k.c.width/2,cy=(b.y0+b.y1)/2-k.c.height/2,t=ang*Math.PI/180;
+  const x=(cx*Math.cos(t)-cy*Math.sin(t))/scale+r.x+r.w/2,y=(cx*Math.sin(t)+cy*Math.cos(t))/scale+r.y+r.h/2,w=(b.x1-b.x0)/scale,h=(b.y1-b.y0)/scale;
+  return {x:x-w/2,y:y-h/2,w,h}}
+
+/* --- 傾き補正：文字の行が水平になる角度を探す（投影法） --- */
+function inkPoints(src,maxW){
+  // 周りより暗い点（＝文字の線）だけを拾う。ラベルの地色や背景は拾わない（局所平均との差で判定）
+  const s=Math.min(1,maxW/Math.max(src.width,src.height)),w=Math.max(1,Math.round(src.width*s)),h=Math.max(1,Math.round(src.height*s));
+  const c=document.createElement('canvas');c.width=w;c.height=h;const g=c.getContext('2d',{willReadFrequently:true});g.drawImage(src,0,0,w,h);
+  const a=g.getImageData(0,0,w,h).data,n=w*h,gr=new Float32Array(n),I=new Float64Array((w+1)*(h+1));
+  for(let i=0;i<n;i++)gr[i]=a[i*4]*.3+a[i*4+1]*.59+a[i*4+2]*.11;
+  for(let y=0;y<h;y++){let row=0;for(let x=0;x<w;x++){row+=gr[y*w+x];I[(y+1)*(w+1)+x+1]=I[y*(w+1)+x+1]+row}}
+  const R=Math.max(3,Math.round(Math.max(w,h)/50)),pts=[];
+  for(let y=0;y<h;y++){const y0=Math.max(0,y-R),y1=Math.min(h,y+R+1);
+    for(let x=0;x<w;x++){const x0=Math.max(0,x-R),x1=Math.min(w,x+R+1),m=(I[y1*(w+1)+x1]-I[y0*(w+1)+x1]-I[y1*(w+1)+x0]+I[y0*(w+1)+x0])/((x1-x0)*(y1-y0));
+      if(gr[y*w+x]<m-Math.max(12,m*.12))pts.push(x,y)}}
+  if(pts.length>80000){const k=Math.ceil(pts.length/80000)*2,p2=[];for(let i=0;i<pts.length;i+=k)p2.push(pts[i],pts[i+1]);return {pts:p2,w,h}}
+  return {pts,w,h};
+}
+function bestAngle(P,range,stepDeg,center){
+  const {pts,w,h}=P,off=Math.ceil(w*Math.tan(Math.PI/180*Math.max(range,1)))+2,rows=new Float32Array(h+off*2+2);
+  const sc=a=>{rows.fill(0);const t=Math.tan(a*Math.PI/180);for(let i=0;i<pts.length;i+=2){rows[Math.round(pts[i+1]-pts[i]*t)+off]++}let s=0;for(let i=0;i<rows.length;i++)s+=rows[i]*rows[i];return s};
+  const c0=center||0;let best=c0,bs=-1;
+  for(let a=c0-range;a<=c0+range+1e-6;a+=stepDeg){const s=sc(a);if(s>bs){bs=s;best=a}}
+  return {a:best,gain:bs/Math.max(1,sc(0))};
+}
+function findSkew(src,maxW,range){
+  const P=inkPoints(src,maxW);if(P.pts.length<200)return {a:0,gain:1};
+  const r1=bestAngle(P,range,1),r2=bestAngle(P,1,.25,r1.a);return r2;
+}
+// 写真全体の傾きを直す（1枚につき1回）
+let deskewed=false;
+function deskewPhoto(){
+  if(deskewed)return 0;deskewed=true;
+  const {a,gain}=findSkew(cv,700,25);
+  if(Math.abs(a)<1||gain<1.12)return 0;
+  const t=document.createElement('canvas');t.width=cv.width;t.height=cv.height;const g=t.getContext('2d');
+  const e=ctx.getImageData(0,0,1,1).data;g.fillStyle=`rgb(${e[0]},${e[1]},${e[2]})`;g.fillRect(0,0,t.width,t.height);
+  g.translate(t.width/2,t.height/2);g.rotate(-a*Math.PI/180);g.drawImage(cv,-cv.width/2,-cv.height/2);
+  ctx.clearRect(0,0,cv.width,cv.height);ctx.drawImage(t,0,0);
+  return a;
+}
 const pad=(b,p)=>{const x=Math.max(0,b.x-b.h*p),y=Math.max(0,b.y-b.h*p*.8),x2=Math.min(cv.width,b.x+b.w+b.h*p),y2=Math.min(cv.height,b.y+b.h*(1+p*.8));return{x,y,w:x2-x,h:y2-y,lh:b.h}};
 // 「LOT No.」「No.」などの見出しを取り除く
 function strip(t){
@@ -352,43 +398,65 @@ function strip(t){
 }
 const clean=t=>strip(t.trim().toUpperCase().replace(/^[-/.#:]+|[-/.#:]+$/g,'')).replace(/^[-/.#:]+/,'');
 async function readLine(w,r){
-  // 方式（濃淡そのまま／白黒二値化）×文字の大きさ（2通り）で読み、結果を投票で集計する
+  // 行ごとに傾きを測って戻してから、濃淡／白黒／ドット文字向けの3方式で読み、結果を投票で集計する
+  const probe=crop(r,'gray',40);const sk=findSkew(probe.c,600,12);const ang=Math.abs(sk.a)>=.75&&sk.gain>1.05?sk.a:0;
+  if(ang)r={...r,lh:Math.max(r.lh*.35,r.lh-r.w*Math.abs(Math.tan(ang*Math.PI/180))*.8)}; // 傾いた行は枠が縦に大きく出るので、実際の文字の高さに直す
   const out=[];
-  for(const mode of ['gray','bin'])for(const tg of [32,42]){
-    const {c,scale}=crop(r,mode,tg);
-    const {data}=await w.recognize(c);
-    out.push(...(data.words||[]).map(x=>({t:clean(x.text),c:x.confidence||0,b:toCv(x.bbox,r,scale)})).filter(x=>x.t.length>=3&&/\d/.test(x.t)));
+  for(const [mode,tg] of [['gray',34],['bin',32],['bin',42],['dot',38]]){
+    const k=crop(r,mode,tg,ang);
+    const {data}=await w.recognize(k.c);
+    out.push(...(data.words||[]).map(x=>({t:clean(x.text),c:x.confidence||0,b:toCv(x.bbox,k)})).filter(x=>x.t.length>=2&&/\d/.test(x.t)));
   }
   return out;
 }
 async function ocr(){
   const w=await getWorker();
-  let lines,first=[];
-  if(sel){
-    lines=[{...sel,lh:sel.h*.6}];
-  }else{
-    status('番号らしい行を探しています',0.3);
-    await w.setParameters({tessedit_pageseg_mode:'11'});
-    const full={x:0,y:0,w:cv.width,h:cv.height};
-    const {c,scale}=crop({...full,lh:Math.max(cv.width,cv.height)/40},'gray',30);
-    const {data}=await w.recognize(c);
-    first=(data.words||[]).map(x=>({t:clean(x.text),c:x.confidence||0,b:toCv(x.bbox,full,scale)})).filter(x=>x.t.length>=3&&/\d/.test(x.t));
-    first.sort((a,b)=>score(b)-score(a));
-    lines=[];
-    for(const x of first){ // 近い位置の候補は同じ行として扱う
-      if(lines.some(l=>Math.abs((l.y+l.h/2)-(x.b.y+x.b.h/2))<x.b.h*.7&&x.b.x<l.x+l.w&&x.b.x+x.b.w>l.x))continue;
-      lines.push(pad(x.b,.6));if(lines.length>=2)break;
-    }
+  // ① 対象範囲（選んだ範囲、なければ写真全体）から番号らしい単語を探し、行の位置を決める
+  const area=sel?{...sel}:{x:0,y:0,w:cv.width,h:cv.height};
+  status('番号らしい行を探しています',0.3);
+  await w.setParameters({tessedit_pageseg_mode:'11'});
+  const k=crop({...area,lh:sel?sel.h/2.2:Math.max(cv.width,cv.height)/40},'gray',sel?40:30);
+  const {data}=await w.recognize(k.c);
+  const first=(data.words||[]).map(x=>({t:clean(x.text),c:x.confidence||0,b:toCv(x.bbox,k)})).filter(x=>x.t.length>=2&&/\d/.test(x.t));
+  first.sort((a,b)=>score(b)-score(a));
+  const lines=[],top=first.length?score(first[0]):0;
+  for(const x of first){ // 近い位置の候補は同じ行として扱う。電話番号など明らかに違うものの行は後回し
+    if(lines.length&&score(x)<top-60&&!sel)continue;
+    if(lines.some(l=>Math.abs((l.y+l.h/2)-(x.b.y+x.b.h/2))<x.b.h*.7&&x.b.x<l.x+l.w&&x.b.x+x.b.w>l.x))continue;
+    const p=pad(x.b,.6);if(sel){p.x=Math.max(p.x,sel.x-4);p.w=Math.min(p.x+p.w,sel.x+sel.w+4)-p.x}
+    lines.push(p);if(lines.length>=3)break;
   }
+  if(!lines.length&&sel)lines.push({...sel,lh:sel.h*.6}); // 選んだ範囲で何も見つからなければ、1行として読む
+  // ② 行ごとに切り出して読み直す
   await w.setParameters({tessedit_pageseg_mode:'7'});
-  let all=first.slice();
-  for(let i=0;i<lines.length;i++){status(`読み取り中（${i+1}/${lines.length}）`,0.4+0.6*i/lines.length);all.push(...await readLine(w,lines[i]))}
-  // 同じ文字列をまとめ、読めた回数（票）と最高の確からしさで並べる
+  let all=first.slice();const tops=[];
+  for(let i=0;i<lines.length;i++){
+    status(`読み取り中（${i+1}/${lines.length}）`,0.4+0.6*i/lines.length);
+    const res=await readLine(w,lines[i]);all.push(...res);
+    const t=vote(res)[0];if(t)tops.push({...t,line:lines[i]});
+  }
+  let list=vote(all).filter(x=>x.t.length>=3);
+  // ③ 2段書き：上下に並んだ2行をつなげた候補も出す（自動では選ばず、候補として表示）
+  tops.sort((a,b)=>a.b.y-b.b.y);
+  for(let i=0;i+1<tops.length;i++){const u=tops[i],d=tops[i+1];
+    const gap=d.b.y-(u.b.y+u.b.h),ovx=Math.min(u.b.x+u.b.w,d.b.x+d.b.w)-Math.max(u.b.x,d.b.x);
+    if(gap<Math.max(u.b.h,d.b.h)*1.6&&ovx>-Math.max(u.b.h,d.b.h)){
+      const x=Math.min(u.b.x,d.b.x),y=u.b.y,x2=Math.max(u.b.x+u.b.w,d.b.x+d.b.w),y2=d.b.y+d.b.h;
+      // 下の段が短い（「07」など）ときは続きの可能性が高いので、つなげた候補を上位に出す
+      const tail=d.t.length<=3;
+      for(const j of ['-',''])list.push({t:u.t+j+d.t,c:Math.min(u.c,d.c),v:tail?Math.min(u.v,d.v):0,b:{x,y,w:x2-x,h:y2-y},join:!tail,tail});
+    }}
+  return list.sort((a,b)=>score(b)-score(a));
+}
+// 同じ文字列をまとめ、読めた回数（票）と最高の確からしさで並べる
+function vote(arr){
   const m=new Map();
-  for(const x of all){const p=m.get(x.t);if(!p)m.set(x.t,{...x,v:1});else{p.v++;if(x.c>p.c){p.c=x.c;p.b=x.b}}}
+  for(const x of arr){const p=m.get(x.t);if(!p)m.set(x.t,{...x,v:1});else{p.v++;if(x.c>p.c){p.c=x.c;p.b=x.b}}}
   return [...m.values()].sort((a,b)=>score(b)-score(a));
 }
-function score(w){const t=w.t,re=fmtRe();let s=w.c+(w.v?Math.min(w.v,5)*12:0);if(/\d/.test(t))s+=15;if(/[A-Z]/.test(t)&&/\d/.test(t))s+=10;s+=Math.min(t.length,12)*2;if(re&&re.test(t))s+=60;if(re&&re.test(t)&&mfg(t))s+=20;return s}
+// 電話番号・郵便番号・重さや量（16KG など）は番号の候補から下げる
+const NOT_LOT=[/^0\d{1,4}-\d{1,4}-\d{3,4}$/,/^\d{3}-\d{4}$/,/^\d+(\.\d+)?(KG|G|L|ML|MM|M|CM|PCS)$/];
+function score(w){const t=w.t,re=fmtRe();let s=w.c+(w.v?Math.min(w.v,5)*12:0)+(w.tail?(w.t.includes('-')?14:8):0)-(w.join&&!(re&&re.test(t))?70:0)-(NOT_LOT.some(r=>r.test(t))&&!(re&&re.test(t))?80:0);if(/\d/.test(t))s+=15;if(/[A-Z]/.test(t)&&/\d/.test(t))s+=10;s+=Math.min(t.length,12)*2;if(re&&re.test(t))s+=60;if(re&&re.test(t)&&mfg(t))s+=20;return s}
 
 /* --- 写真の上に読み取った文字を重ねる --- */
 const ov=$('ov');let hits=[];
@@ -420,6 +488,7 @@ async function run(redo){
     status('バーコードを探しています',0.1);
     const b=barcode();
     if(b){put(i,b.text,`バーコード（${b.fmt}）から読み取り`,[],'bar',redo);status('バーコードを読み取りました');return}
+    if(!sel){const a=deskewPhoto();if(a)status(`写真の傾き（${Math.abs(a).toFixed(1)}°）を補正しました`,0.2)}
     const ws=await ocr();
     if(!ws.length){$('via').textContent='文字が見つかりませんでした。番号の部分をなぞって範囲を絞ってください';status('文字が見つかりませんでした');return}
     const top=ws[0];
