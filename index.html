@@ -165,7 +165,7 @@ td .del{min-height:40px;padding:0 12px;border-width:1px;font-weight:400}
 <div id="toast"></div>
 
 <script src="zxing.min.js"></script>
-<script src="tess/tesseract.min.js"></script>
+<script src="tesseract.min.js"></script>
 <script>
 {
 const $=id=>document.getElementById(id);
@@ -312,7 +312,7 @@ function barcode(){
 let worker=null;
 async function getWorker(){
   if(worker)return worker;
-  const base=new URL('tess/',location.href).href;
+  const base=new URL('./',location.href).href;
   worker=await Tesseract.createWorker('eng',1,{
     workerPath:base+'worker.min.js',corePath:base,langPath:base.replace(/\/$/,''),workerBlobURL:false,
     logger:m=>{if(m.status&&m.progress!=null)status(({'loading tesseract core':'文字認識の準備中','loading language traineddata':'辞書を読み込み中','initializing api':'初期化中','recognizing text':'文字を読み取り中'})[m.status]||m.status,m.progress)}
