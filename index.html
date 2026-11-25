@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ロット番号読み取り</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=BIZ+UDPGothic:wght@400;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+<style>
+/* VOICE: 現場の道具。迷わず、手袋でも押せる。
+   IDEA: 材料に下がっている検収タグ（荷札）。読み取った番号がタグに刷られる。
+   PICTURE: 撮影した写真と読み取り枠、その横に大きな番号タグ。
+   COLOUR/TYPE: 安全黄 #f2c200 を主、墨 #1d1f21、確認の赤 #d93a1e。BIZ UDPゴシック＋番号は等幅。
+   LAYOUT: 上に撮影と結果、下に記録一覧。600px以下は縦積み。 */
+:root{color-scheme:light dark;--bg:light-dark(#f4f3ef,#16171a);--card:light-dark(#fff,#202226);--ink:light-dark(#1d1f21,#ecebe6);--mute:light-dark(#62656b,#a3a6ac);--line:light-dark(#d9d7d0,#34373c);--y:#f2c200;--yi:#1d1f21;--red:light-dark(#c4321a,#ff7a5c);--ok:light-dark(#1f7a3a,#5fd08a)}
+:root[data-theme=light]{color-scheme:light}:root[data-theme=dark]{color-scheme:dark}
+*{box-sizing:border-box;min-width:0}
+[hidden]{display:none!important}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.55 "BIZ UDPGothic",system-ui,sans-serif;overflow-x:clip}
+.mono{font-family:"JetBrains Mono",ui-monospace,monospace}
+header{background:var(--y);color:var(--yi);padding:14px max(4vw,16px);display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+header h1{margin:0;font-size:22px;line-height:1.1}
+header p{margin:0;font-size:14px;opacity:.8}
+main{max-width:1240px;margin:0 auto;padding:20px max(4vw,16px) 60px}
+.top{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(0,1fr);gap:20px}
+@media(max-width:760px){.top{grid-template-columns:minmax(0,1fr)}}
+.panel{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px}
+.stage{position:relative;background:light-dark(#e8e6df,#0e0f11);border-radius:8px;min-height:300px;display:grid;place-items:center;overflow:hidden;touch-action:none;user-select:none;-webkit-user-select:none}
+.stage canvas{max-width:100%;max-height:62vh;display:block}
+.stage .empty{text-align:center;color:var(--mute);padding:30px;font-size:15px}
+.stage .empty svg{display:block;margin:0 auto 10px}
+#box{position:absolute;border:3px solid var(--y);box-shadow:0 0 0 9999px rgba(0,0,0,.35);border-radius:4px;display:none;pointer-events:none}
+.row{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}
+button,.btn{font:inherit;font-weight:700;min-height:48px;padding:0 18px;border-radius:10px;border:2px solid var(--ink);background:var(--card);color:var(--ink);cursor:pointer;display:inline-flex;align-items:center;gap:8px}
+button.pri,.btn.pri{background:var(--y);color:var(--yi);border-color:var(--yi)}
+button:focus-visible,.btn:focus-within,input:focus-visible,select:focus-visible{outline:3px solid var(--red);outline-offset:2px}
+button:disabled{opacity:.45;cursor:default}
+.btn input{position:absolute;width:1px;height:1px;opacity:0}
+.hint{font-size:13px;color:var(--mute);margin:8px 0 0}
+/* tag */
+.tag{position:relative;background:var(--y);color:var(--yi);border-radius:10px 10px 10px 10px;padding:22px 18px 18px 54px;clip-path:polygon(34px 0,100% 0,100% 100%,34px 100%,0 50%);min-height:150px}
+.tag::before{content:"";position:absolute;left:14px;top:50%;width:14px;height:14px;margin-top:-7px;border-radius:50%;background:var(--card);box-shadow:inset 0 0 0 3px var(--yi)}
+.tag small{display:block;font-size:13px;font-weight:700}
+.tag .num{font-family:"JetBrains Mono",monospace;font-weight:700;font-size:clamp(26px,4.4vw,40px);line-height:1.15;word-break:break-all;margin:6px 0}
+.tag .num i{font-style:normal;background:var(--red);color:#fff;border-radius:3px;padding:0 2px}
+.tag .via{font-size:13px}
+label{display:block;font-size:14px;font-weight:700;margin:14px 0 4px}
+input[type=text],select{font:inherit;font-size:18px;width:100%;min-height:48px;padding:8px 12px;border:2px solid var(--line);border-radius:10px;background:var(--bg);color:var(--ink)}
+input.code{font-family:"JetBrains Mono",monospace;font-size:20px;letter-spacing:.04em}
+.msg{font-size:14px;margin-top:6px;min-height:1.4em}
+.warn{color:var(--red);font-weight:700}.good{color:var(--ok);font-weight:700}
+.prog{height:6px;background:var(--line);border-radius:3px;overflow:hidden;margin-top:10px;display:none}
+.prog b{display:block;height:100%;width:0;background:var(--y);transition:width .2s}
+.alts{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+.alts button{min-height:40px;padding:0 10px;font-size:15px;font-family:"JetBrains Mono",monospace;border-width:1px}
+.kindrow{display:flex;gap:8px}.kindrow select{flex:1}.kindrow button{flex:none}
+.kset{margin-top:10px;border:1px solid var(--line);border-radius:10px;padding:0 12px}
+.kset summary{min-height:48px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-weight:700;cursor:pointer}
+.kset summary span{font-weight:400;font-size:13px;color:var(--mute)}
+.kset[open]{padding-bottom:12px}
+.lifes{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+.unit{display:flex;align-items:center;gap:8px}.unit input{font:inherit;font-size:18px;width:100%;min-height:48px;padding:8px 12px;border:2px solid var(--line);border-radius:10px;background:var(--bg);color:var(--ink)}
+.exp{display:block;margin-top:2px}.exp.ok{color:var(--ok)}.exp.near{color:light-dark(#a15c00,#ffb347);font-weight:700}.exp.out{color:var(--red);font-weight:700}
+td .exp{font-size:14px;white-space:nowrap}
+.addbox{margin-top:8px;padding:12px;border:2px dashed var(--line);border-radius:10px}
+.chk{display:flex;align-items:center;gap:10px;font-weight:700;margin:12px 0 4px;min-height:44px;cursor:pointer}
+.chk input{width:24px;height:24px;accent-color:var(--y)}
+.chk.big{font-size:15px}
+.slots{display:grid;gap:10px}
+.slot{border:2px solid var(--line);border-radius:10px;padding:4px 12px 8px;cursor:pointer}
+.slot.on{border-color:var(--y);box-shadow:0 0 0 2px var(--y)}
+.slot label{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-top:8px}
+.sh{font-weight:400;font-size:12px;color:var(--mute)}.slot.on .sh{visibility:hidden}
+td.n span{display:block}td.n em{font-style:normal;font-size:12px;color:var(--mute);font-family:"BIZ UDPGothic",sans-serif;font-weight:700;margin-right:6px}
+td .ph{display:flex;gap:4px}
+h2{font-size:20px;margin:32px 0 10px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+h2 span{font-size:14px;color:var(--mute);font-weight:400}
+table{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--line);vertical-align:middle}
+th{font-size:13px;color:var(--mute);font-weight:700;background:light-dark(#faf9f6,#1b1c1f)}
+td.n{font-family:"JetBrains Mono",monospace;font-weight:700;font-size:17px;word-break:break-all}
+td img{width:72px;height:54px;object-fit:cover;border-radius:6px;display:block}
+td .del{min-height:40px;padding:0 12px;border-width:1px;font-weight:400}
+.time{white-space:nowrap;font-size:14px;color:var(--mute)}
+.none{padding:26px;text-align:center;color:var(--mute);background:var(--card);border:1px dashed var(--line);border-radius:12px}
+.note{font-size:13px;color:var(--mute);margin-top:18px}
+#toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:10px 18px;border-radius:24px;font-size:15px;opacity:0;transition:opacity .2s;pointer-events:none}
+#toast.on{opacity:1}
+@media(prefers-reduced-motion:reduce){*{transition:none!important}}
+@media(max-width:600px){table{font-size:13px}.stack thead{display:none}.stack tr{display:grid;padding-block:10px;border-bottom:1px solid var(--line)}.stack td{display:flow-root;border:0;padding:3px 12px;padding-inline-start:7.5em;text-align:start}.stack td::before{content:attr(data-l);float:inline-start;width:6.5em;margin-inline-start:-6.5em;font-size:12px;color:var(--mute)}.stack td:empty{display:none}}
+</style>
+<script>new MutationObserver(()=>{for(const c of document.querySelectorAll('.stack td:not([data-l])')){let i=0,p=c;while(p=p.previousElementSibling)i+=p.colSpan;c.dataset.l=c.closest('table').rows[0].cells[i]?.textContent||''}}).observe(document,{childList:true,subtree:true})</script>
+</head>
+<body>
+<header><h1>ロット番号読み取り</h1><p>撮影 → バーコード/文字を自動で読む → 確認して記録</p></header>
+<main>
+<div class="top">
+  <section class="panel">
+    <div class="stage" id="stage">
+      <div class="empty" id="empty">
+        <svg width="64" height="52" viewBox="0 0 64 52" aria-hidden="true"><rect x="2" y="10" width="60" height="40" rx="7" fill="none" stroke="currentColor" stroke-width="3"/><path d="M20 10l5-8h14l5 8" fill="none" stroke="currentColor" stroke-width="3"/><circle cx="32" cy="30" r="11" fill="none" stroke="currentColor" stroke-width="3"/></svg>
+        ラベル・タグを撮影してください<br>写真の上をなぞると読み取る範囲を絞れます
+      </div>
+      <canvas id="cv" hidden></canvas>
+      <div id="box"></div>
+    </div>
+    <div class="row">
+      <label class="btn pri" style="margin:0">撮影する<input type="file" id="cam" accept="image/*" capture="environment"></label>
+      <label class="btn" style="margin:0">写真を選ぶ<input type="file" id="pick" accept="image/*"></label>
+      <button id="again" disabled>範囲を読み直す</button>
+      <button id="clearBox" disabled>範囲を解除</button>
+    </div>
+    <div class="prog" id="prog"><b></b></div>
+    <p class="hint" id="status">文字読み取りの初回は辞書の読み込みに少し時間がかかります。</p>
+  </section>
+
+  <section class="panel">
+    <div class="tag" aria-live="polite">
+      <small id="tagLbl">読み取り結果</small>
+      <div class="num" id="big">―</div>
+      <div class="via" id="via">まだ読み取っていません</div>
+    </div>
+    <label for="kind">材料</label>
+    <div class="kindrow"><select id="kind"></select><button type="button" id="addK">＋ 追加</button></div>
+    <div class="addbox" id="addBox" hidden>
+      <input type="text" id="newK" placeholder="材料名（例：プライマー）" maxlength="30">
+      <label class="chk"><input type="checkbox" id="newTwo">2液性の材料（塗料・樹脂など）</label>
+      <div class="row" style="margin-top:8px"><button type="button" class="pri" id="addOk">追加する</button><button type="button" id="addNo">やめる</button></div>
+      <div class="msg" id="addMsg"></div>
+    </div>
+    <details class="kset" id="kset"><summary>番号の形・有効期間の設定 <span id="ksum"></span></summary>
+      <label for="fmt">番号の形　A＝英字、9＝数字、Y＝年、M＝月、D＝日</label>
+      <input type="text" id="fmt" class="code" placeholder="例：YYMMDD-A99" autocapitalize="characters" spellcheck="false">
+      <p class="hint">例）「YMMDD99」なら 50314 07 → 2025年3月14日製造。日（D）がなければその月の1日製造として計算します。</p>
+      <div class="lifes">
+        <div><label for="life" id="lifeLbl">有効期間（製造から）</label><div class="unit"><input type="number" id="life" inputmode="numeric" min="0" max="240" placeholder="未設定"><span>か月</span></div></div>
+        <div id="life2Box"><label for="life2">硬化剤の有効期間</label><div class="unit"><input type="number" id="life2" inputmode="numeric" min="0" max="240" placeholder="主剤と同じ"><span>か月</span></div></div>
+      </div>
+      <div class="row"><button type="button" id="rmK">この材料を一覧から外す</button></div>
+    </details>
+    <label class="chk big" id="twoRow"><input type="checkbox" id="two">2液性（主剤と硬化剤のロットを別々に記録）</label>
+    <div class="slots" id="slots">
+      <div class="slot on" data-s="0">
+        <label for="code0"><span class="sl" id="sl0">ロット番号・製造番号</span><span class="sh">タップで読み取り先に</span></label>
+        <input type="text" id="code0" class="code" autocomplete="off" autocapitalize="characters" spellcheck="false">
+        <div class="alts" id="alts0"></div><div class="msg" id="check0"></div>
+      </div>
+      <div class="slot" data-s="1" id="slot1" hidden>
+        <label for="code1"><span class="sl">硬化剤</span><span class="sh">タップで読み取り先に</span></label>
+        <input type="text" id="code1" class="code" autocomplete="off" autocapitalize="characters" spellcheck="false">
+        <div class="alts" id="alts1"></div><div class="msg" id="check1"></div>
+      </div>
+    </div>
+    <p class="hint">iPhone・iPadは入力欄をタップして「テキストをスキャン」でも入力できます（Androidはキーボードの機種によります）。</p>
+    <div class="row"><button class="pri" id="save" disabled>この番号を記録</button></div>
+  </section>
+</div>
+
+<h2>記録一覧 <span id="count"></span>
+  <button id="copy" style="margin-left:auto">CSVをコピー</button>
+</h2>
+<div id="list"></div>
+<p class="note">記録はこの端末のブラウザ内に保存されます（試作版）。他の端末とは共有されないので、必要ならCSVをコピーして貼り付けてください。</p>
+</main>
+<div id="toast"></div>
+
+<script src="zxing.min.js"></script>
+<script src="tess/tesseract.min.js"></script>
+<script>
+{
+const $=id=>document.getElementById(id);
+const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const store={get(k,d){try{return JSON.parse(localStorage.getItem(k))??d}catch(e){return d}},set(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch(e){toast('保存できませんでした（容量不足の可能性）')}}};
+/* can: 2液性になりうる材料（塗料・樹脂など）, two: 今2液として扱うか, fmt: 番号の形, life/life2: 有効期間（か月） */
+const DEF=[{n:'塗料',can:true,two:true},{n:'樹脂',can:true,two:true},{n:'ボルト',can:false,two:false},{n:'鋼材',can:false,two:false},{n:'溶接材料',can:false,two:false}];
+let kinds=store.get('lot.kinds',null);
+if(!Array.isArray(kinds)||!kinds.length)kinds=DEF.map(k=>({...k}));
+{ // 以前の保存形式からの移行
+  const old=store.get('lot.fmts',{})||{};
+  kinds.forEach(k=>{if(k.can===undefined){const d=DEF.find(x=>x.n===k.n);k.can=d?d.can:!!k.two}if(!k.can)k.two=false;if(k.fmt===undefined&&old[k.n])k.fmt=old[k.n]});
+  if(!store.get('lot.v3',false)){if(!kinds.some(k=>k.n==='樹脂'))kinds.splice(1,0,{n:'樹脂',can:true,two:true});store.set('lot.v3',true)}
+  store.set('lot.kinds',kinds);
+}
+let recs=store.get('lot.recs',[]);
+let img=null,sel=null,thumb='';
+const slots=[{via:'',img:''},{via:'',img:''}];let act=0;
+const cv=$('cv'),ctx=cv.getContext('2d'),stage=$('stage'),box=$('box');
+
+function toast(t){const e=$('toast');e.textContent=t;e.classList.add('on');clearTimeout(toast.t);toast.t=setTimeout(()=>e.classList.remove('on'),2000)}
+function status(t,p){$('status').textContent=t;const pr=$('prog');if(p==null){pr.style.display='none'}else{pr.style.display='block';pr.firstChild.style.width=Math.round(p*100)+'%'}}
+const saveKinds=()=>store.set('lot.kinds',kinds);
+
+/* --- materials --- */
+const cur=()=>kinds.find(k=>k.n===$('kind').value)||kinds[0];
+function renderKinds(keep){
+  $('kind').innerHTML=kinds.map(k=>`<option value="${esc(k.n)}">${esc(k.n)}${k.can&&k.two?'（2液）':''}</option>`).join('');
+  const want=keep||store.get('lot.kind',kinds[0].n);
+  $('kind').value=kinds.some(k=>k.n===want)?want:kinds[0].n;
+  applyKind();
+}
+function applyKind(){
+  const k=cur();store.set('lot.kind',k.n);
+  $('twoRow').hidden=!k.can;$('two').checked=!!(k.can&&k.two);
+  $('fmt').value=k.fmt||'';$('life').value=k.life??'';$('life2').value=k.life2??'';
+  $('rmK').disabled=kinds.length<=1;
+  setTwo();
+}
+function ksum(){
+  const k=cur(),p=[];
+  if(k.fmt)p.push(k.fmt);
+  if(k.life)p.push(two()?`主剤${k.life}か月・硬化剤${k.life2||k.life}か月`:`${k.life}か月`);
+  $('ksum').textContent=p.length?'（'+p.join('／')+'）':'（未設定）';
+}
+function setTwo(){
+  const t=two();
+  $('slot1').hidden=!t;$('sl0').textContent=t?'主剤':'ロット番号・製造番号';
+  $('life2Box').hidden=!t;$('lifeLbl').textContent=t?'主剤の有効期間（製造から）':'有効期間（製造から）';
+  if(!t&&act===1)setAct(0);else setAct(act);
+  update();
+}
+$('kind').onchange=applyKind;
+$('two').onchange=()=>{const k=cur();if(!k.can){$('two').checked=false;return}k.two=$('two').checked;saveKinds();renderKinds(k.n)};
+$('fmt').oninput=()=>{cur().fmt=$('fmt').value.trim().toUpperCase();saveKinds();update()};
+const num=v=>{const n=parseInt(v,10);return isFinite(n)&&n>0?n:null};
+$('life').oninput=()=>{cur().life=num($('life').value);saveKinds();update()};
+$('life2').oninput=()=>{cur().life2=num($('life2').value);saveKinds();update()};
+$('addK').onclick=()=>{$('addBox').hidden=false;$('newK').value='';$('newTwo').checked=false;$('addMsg').textContent='';$('newK').focus()};
+$('addNo').onclick=()=>{$('addBox').hidden=true};
+function addKind(){
+  const n=$('newK').value.trim();
+  if(!n){$('addMsg').innerHTML='<span class="warn">材料名を入れてください</span>';return}
+  if(kinds.some(k=>k.n===n)){$('addMsg').innerHTML='<span class="warn">同じ名前の材料があります</span>';return}
+  const c=$('newTwo').checked;kinds.push({n,can:c,two:c});saveKinds();
+  $('addBox').hidden=true;renderKinds(n);$('kset').open=true;toast('「'+n+'」を追加しました。番号の形と有効期間を設定できます');
+}
+$('addOk').onclick=addKind;
+$('newK').onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();addKind()}};
+let rmPend=false;
+$('rmK').onclick=()=>{
+  if(kinds.length<=1)return;
+  const k=cur();
+  if(!rmPend){rmPend=true;$('rmK').textContent='もう一度押すと外します';setTimeout(()=>{rmPend=false;$('rmK').textContent='この材料を一覧から外す'},2500);return}
+  rmPend=false;$('rmK').textContent='この材料を一覧から外す';
+  kinds=kinds.filter(x=>x!==k);saveKinds();renderKinds();toast('「'+k.n+'」を外しました（記録は残ります）');
+};
+
+/* --- slots --- */
+function setAct(i){act=i;document.querySelectorAll('.slot').forEach(el=>el.classList.toggle('on',+el.dataset.s===i));showBig()}
+document.querySelectorAll('.slot').forEach(el=>el.addEventListener('click',e=>{if(e.target.closest('.alts button'))return;setAct(+el.dataset.s)}));
+const two=()=>cur().can&&$('two').checked;
+const slotName=i=>two()?(i?'硬化剤':'主剤'):'';
+const val=i=>$('code'+i).value.trim().toUpperCase();
+
+/* --- image load --- */
+function load(file){
+  if(!file)return;
+  const url=URL.createObjectURL(file);
+  const im=new Image();
+  im.onload=()=>{
+    const M=2000,s=Math.min(1,M/Math.max(im.width,im.height));
+    cv.width=Math.round(im.width*s);cv.height=Math.round(im.height*s);
+    ctx.drawImage(im,0,0,cv.width,cv.height);URL.revokeObjectURL(url);
+    img=true;sel=null;box.style.display='none';cv.hidden=false;$('empty').hidden=true;
+    $('again').disabled=false;$('clearBox').disabled=true;
+    const t=document.createElement('canvas'),ts=240/Math.max(cv.width,cv.height);
+    t.width=Math.round(cv.width*ts);t.height=Math.round(cv.height*ts);t.getContext('2d').drawImage(cv,0,0,t.width,t.height);
+    thumb=t.toDataURL('image/jpeg',.7);
+    run();
+  };
+  im.onerror=()=>toast('画像を開けませんでした');
+  im.src=url;
+}
+$('cam').onchange=e=>{load(e.target.files[0]);e.target.value=''};
+$('pick').onchange=e=>{load(e.target.files[0]);e.target.value=''};
+
+/* --- region select --- */
+let drag=null;
+function rel(e){const r=cv.getBoundingClientRect();return{x:Math.max(0,Math.min(r.width,e.clientX-r.left)),y:Math.max(0,Math.min(r.height,e.clientY-r.top)),r}}
+stage.addEventListener('pointerdown',e=>{if(!img)return;drag=rel(e);sel=null;stage.setPointerCapture(e.pointerId)});
+stage.addEventListener('pointermove',e=>{if(!drag)return;const p=rel(e),r=drag.r,sr=stage.getBoundingClientRect();
+  const x=Math.min(drag.x,p.x),y=Math.min(drag.y,p.y),w=Math.abs(p.x-drag.x),h=Math.abs(p.y-drag.y);
+  Object.assign(box.style,{display:'block',left:(r.left-sr.left+x)+'px',top:(r.top-sr.top+y)+'px',width:w+'px',height:h+'px'});
+  const k=cv.width/r.width;sel={x:x*k,y:y*k,w:w*k,h:h*k}});
+stage.addEventListener('pointerup',()=>{if(!drag)return;drag=null;
+  if(!sel||sel.w<20||sel.h<10){sel=null;box.style.display='none';return}
+  $('clearBox').disabled=false;run(true)});
+$('again').onclick=()=>run(true);
+$('clearBox').onclick=()=>{sel=null;box.style.display='none';$('clearBox').disabled=true;run(true)};
+
+function region(scale){
+  const s=sel||{x:0,y:0,w:cv.width,h:cv.height};
+  const c=document.createElement('canvas');c.width=Math.max(1,Math.round(s.w*scale));c.height=Math.max(1,Math.round(s.h*scale));
+  const g=c.getContext('2d');g.imageSmoothingQuality='high';g.drawImage(cv,s.x,s.y,s.w,s.h,0,0,c.width,c.height);return c;
+}
+
+/* --- barcode --- */
+function barcode(){
+  if(!window.ZXing)return null;
+  const Z=ZXing,hints=new Map();hints.set(Z.DecodeHintType.TRY_HARDER,true);
+  const reader=new Z.MultiFormatReader();reader.setHints(hints);
+  for(const sc of [1,0.6,1.6]){
+    try{
+      const c=region(sc),src=new Z.HTMLCanvasElementLuminanceSource(c);
+      const r=reader.decode(new Z.BinaryBitmap(new Z.HybridBinarizer(src)));
+      if(r&&r.getText())return{text:r.getText(),fmt:Z.BarcodeFormat[r.getBarcodeFormat()]};
+    }catch(e){}
+  }
+  return null;
+}
+
+/* --- OCR --- */
+let worker=null;
+async function getWorker(){
+  if(worker)return worker;
+  const base=new URL('tess/',location.href).href;
+  worker=await Tesseract.createWorker('eng',1,{
+    workerPath:base+'worker.min.js',corePath:base,langPath:base.replace(/\/$/,''),workerBlobURL:false,
+    logger:m=>{if(m.status&&m.progress!=null)status(({'loading tesseract core':'文字認識の準備中','loading language traineddata':'辞書を読み込み中','initializing api':'初期化中','recognizing text':'文字を読み取り中'})[m.status]||m.status,m.progress)}
+  });
+  await worker.setParameters({tessedit_char_whitelist:'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-/.#'});
+  return worker;
+}
+function prep(){
+  const s=sel||{w:cv.width,h:cv.height};
+  const scale=Math.min(3,Math.max(1,900/Math.max(s.w,1)));
+  const c=region(scale),g=c.getContext('2d'),d=g.getImageData(0,0,c.width,c.height),a=d.data;
+  let mn=255,mx=0;for(let i=0;i<a.length;i+=4){const v=a[i]*.3+a[i+1]*.59+a[i+2]*.11;a[i]=v;if(v<mn)mn=v;if(v>mx)mx=v}
+  const k=255/Math.max(1,mx-mn);for(let i=0;i<a.length;i+=4){const v=(a[i]-mn)*k;a[i]=a[i+1]=a[i+2]=v}
+  g.putImageData(d,0,0);return c;
+}
+async function ocr(){
+  const w=await getWorker();
+  await w.setParameters({tessedit_pageseg_mode:sel?'7':'11'});
+  const {data}=await w.recognize(prep());
+  const words=(data.words||[]).map(x=>({t:x.text.trim(),c:x.confidence})).filter(x=>x.t.length>=3);
+  words.sort((a,b)=>score(b)-score(a));
+  return words;
+}
+function score(w){const t=w.t,re=fmtRe();let s=w.c;if(/\d/.test(t))s+=15;if(/[A-Z]/.test(t)&&/\d/.test(t))s+=10;s+=Math.min(t.length,12)*2;if(re&&re.test(t))s+=60;if(re&&re.test(t)&&mfg(t))s+=20;return s}
+
+let busy=false;
+async function run(redo){
+  if(!img||busy)return;busy=true;$('again').disabled=true;
+  const i=act;
+  try{
+    status('バーコードを探しています',0.1);
+    const b=barcode();
+    if(b){put(i,b.text,`バーコード（${b.fmt}）から読み取り`,[],'bar',redo);status('バーコードを読み取りました');return}
+    const ws=await ocr();
+    if(!ws.length){$('via').textContent='文字が見つかりませんでした。番号の部分をなぞって範囲を絞ってください';status('文字が見つかりませんでした');return}
+    const top=ws[0];
+    put(i,top.t,`文字認識で読み取り（確からしさ ${Math.round(top.c)}%）`,ws.slice(1,6).map(x=>x.t),'ocr',redo);
+    status(sel?'選んだ範囲を読み取りました':'全体を読み取りました。違う場合は番号をなぞってください');
+  }catch(e){console.error(e);status('読み取りに失敗しました：'+(e&&e.message||e));}
+  finally{busy=false;$('again').disabled=false}
+}
+
+/* --- lot rule → 製造日・有効期限 --- */
+function fmtRe(){const f=(cur().fmt||'').trim().toUpperCase();if(!f)return null;
+  return new RegExp('^'+[...f].map(c=>c==='A'?'[A-Z]':'9YMD'.includes(c)?'[0-9]':c.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')).join('')+'$')}
+function mfg(v){
+  const f=(cur().fmt||'').toUpperCase(),re=fmtRe();
+  if(!re||!re.test(v)||!/Y/.test(f)||!/M/.test(f))return null;
+  let y='',m='',d='';[...f].forEach((c,i)=>{if(c==='Y')y+=v[i];else if(c==='M')m+=v[i];else if(c==='D')d+=v[i]});
+  const now=new Date().getFullYear();let Y;
+  if(y.length>=4)Y=+y.slice(0,4);
+  else if(y.length===2)Y=2000+(+y);
+  else{Y=now-((now-(+y))%10+10)%10;if(Y<now-9)Y+=10} // 年の下1桁 → 今年以前で最も近い年
+  const M=+m,D=d?+d:1;
+  if(M<1||M>12||D<1||D>31)return {bad:true};
+  const dt=new Date(Y,M-1,D);if(dt.getMonth()!==M-1)return {bad:true};
+  if(dt>new Date(Date.now()+864e5*31))return {bad:true,future:true};
+  return {date:dt};
+}
+function addM(d,n){const r=new Date(d.getFullYear(),d.getMonth()+n,d.getDate());if(r.getDate()!==d.getDate())r.setDate(0);return r}
+const ymd=d=>`${d.getFullYear()}/${d.getMonth()+1}/${d.getDate()}`;
+const today=()=>{const t=new Date();t.setHours(0,0,0,0);return t};
+function expiry(i){
+  const v=val(i);if(!v)return null;
+  const k=cur(),life=i===1?(k.life2||k.life):k.life,m=mfg(v);
+  if(!m)return null;
+  if(m.bad)return {bad:true,future:m.future};
+  if(!life)return {mfg:m.date};
+  const exp=addM(m.date,life),left=Math.round((exp-today())/864e5);
+  return {mfg:m.date,exp,left,st:left<0?'out':left<=30?'near':'ok'};
+}
+function expHtml(e){
+  if(!e)return '';
+  if(e.bad)return `<span class="exp out">${e.future?'製造日が未来の日付になります。番号を確認してください':'番号から製造日を読み取れません（月・日が不正）'}</span>`;
+  if(!e.exp)return `<span class="exp">製造日 ${ymd(e.mfg)}（有効期間が未設定）</span>`;
+  const t=e.st==='out'?`期限切れ（${-e.left}日経過）`:e.st==='near'?`期限間近（あと${e.left}日）`:`期限内（あと${e.left}日）`;
+  return `<span class="exp ${e.st}">製造 ${ymd(e.mfg)} → 期限 ${ymd(e.exp)}　${t}</span>`;
+}
+
+/* --- result & checks --- */
+const CONF=/[O0QDI1LB8S5Z2G6]/g;
+let lastMsg='';
+function put(i,t,msg,alts,how,redo){
+  slots[i].via=how;slots[i].img=thumb;$('code'+i).value=t;lastMsg=(slotName(i)?slotName(i)+'：':'')+msg;
+  $('alts'+i).innerHTML=alts.length?'<span class="hint" style="margin:0;align-self:center">他の候補：</span>'+alts.map(a=>`<button type="button" data-a="${esc(a)}">${esc(a)}</button>`).join(''):'';
+  if(two()&&i===0&&!redo&&!val(1)){setAct(1);lastMsg+='　→ 続けて硬化剤のラベルを撮影してください'}
+  else setAct(act);
+  update();
+}
+[0,1].forEach(i=>{
+  $('alts'+i).onclick=e=>{const b=e.target.closest('button');if(b){$('code'+i).value=b.dataset.a;slots[i].via='ocr';update()}};
+  $('code'+i).oninput=()=>{if(slots[i].via!=='bar')slots[i].via='hand';if(!slots[i].img)slots[i].img=thumb;update()};
+  $('code'+i).onfocus=()=>setAct(i);
+});
+function mark(v,i){return esc(v).replace(CONF,m=>slots[i].via==='ocr'?`<i>${m}</i>`:m)}
+function showBig(){
+  const v=val(act);
+  $('tagLbl').textContent=two()?`読み取り先：${slotName(act)}`:'読み取り結果';
+  $('big').innerHTML=v?mark(v,act):'―';
+  $('via').textContent=lastMsg||(v?'':'まだ読み取っていません');
+}
+function check(i){
+  const v=val(i),re=fmtRe(),ck=$('check'+i);
+  if(!v){ck.textContent='';return}
+  const used=recs.some(r=>r.code===v||r.code2===v);let w='';
+  if(re&&!re.test(v))w='<span class="warn">番号の形が合いません。写真と見比べてください</span>';
+  else if(slots[i].via==='ocr'&&/[O0QDI1LB8S5Z2G6]/.test(v))w='<span class="warn">赤い文字は読み違えやすい文字です（O/0、I/1、B/8、S/5 など）。実物で確認してください</span>';
+  else if(used)w='<span class="warn">この番号はすでに記録されています</span>';
+  else if(two()&&i===1&&v===val(0))w='<span class="warn">主剤と同じ番号です。硬化剤のラベルか確認してください</span>';
+  else if(re)w='<span class="good">番号の形は一致しています</span>';
+  ck.innerHTML=w+expHtml(expiry(i));
+}
+let force=false;
+function update(){
+  check(0);if(two())check(1);showBig();ksum();
+  const ok=two()?(val(0)&&val(1)):val(0);
+  const out=[0,1].slice(0,two()?2:1).some(i=>{const e=expiry(i);return e&&e.st==='out'});
+  $('save').disabled=!ok;
+  $('save').textContent=two()&&!ok&&(val(0)||val(1))?'主剤と硬化剤の両方を入れてください':out?(force?'期限切れのまま記録する':'期限切れです（もう一度押すと記録）'):'この番号を記録';
+  $('save').classList.toggle('pri',!out);
+}
+
+/* --- records --- */
+const HOW={bar:'バーコード',ocr:'文字認識',hand:'手入力','':'手入力'};
+$('save').onclick=()=>{
+  const t=two(),a=val(0),b=t?val(1):'';if(!a||(t&&!b))return;
+  const e0=expiry(0),e1=t?expiry(1):null;
+  const out=[e0,e1].some(e=>e&&e.st==='out');
+  if(out&&!force){force=true;update();setTimeout(()=>{force=false;update()},3000);return}
+  force=false;
+  const ex=e=>e&&e.exp?{mfg:e.mfg.toISOString(),exp:e.exp.toISOString()}:e&&e.mfg?{mfg:e.mfg.toISOString()}:{};
+  recs.unshift({id:Date.now(),kind:cur().n,two:t,code:a,code2:b,how:slots[0].via||'hand',how2:t?(slots[1].via||'hand'):'',img:slots[0].img||thumb,img2:t?(slots[1].img||''):'',at:new Date().toISOString(),e1:ex(e0),e2:ex(e1)});
+  store.set('lot.recs',recs);render();toast(t?`記録しました：主剤 ${a} / 硬化剤 ${b}`:'記録しました：'+a);
+  [0,1].forEach(i=>{$('code'+i).value='';$('alts'+i).innerHTML='';slots[i].via='';slots[i].img=''});
+  lastMsg='次のラベルを撮影してください';setAct(0);update();
+};
+function fmtT(s){const d=new Date(s);return `${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`}
+function expCell(e){
+  if(!e||!e.exp)return e&&e.mfg?`<span class="exp">製造 ${ymd(new Date(e.mfg))}</span>`:'<span class="exp">―</span>';
+  const x=new Date(e.exp),left=Math.round((x-today())/864e5),st=left<0?'out':left<=30?'near':'ok';
+  return `<span class="exp ${st}">${ymd(x)}${st==='out'?' 切れ':st==='near'?` あと${left}日`:''}</span>`;
+}
+function render(){
+  $('count').textContent=recs.length?`${recs.length}件`:'';
+  $('list').innerHTML=recs.length?`<table class="stack"><thead><tr><th>写真</th><th>材料</th><th>ロット番号</th><th>有効期限</th><th>読み取り</th><th>日時</th><th></th></tr></thead><tbody>${
+    recs.map(r=>`<tr><td><div class="ph">${r.img?`<img src="${esc(r.img)}" alt="">`:''}${r.img2&&r.img2!==r.img?`<img src="${esc(r.img2)}" alt="">`:''}</div></td><td>${esc(r.kind)}${r.two?'（2液）':''}</td><td class="n">${
+      r.two?`<span><em>主剤</em>${esc(r.code)}</span><span><em>硬化剤</em>${esc(r.code2)}</span>`:esc(r.code)
+    }</td><td>${expCell(r.e1)}${r.two?expCell(r.e2):''}</td><td>${esc(HOW[r.how]||'')}${r.two?' / '+esc(HOW[r.how2]||''):''}</td><td class="time">${esc(fmtT(r.at))}</td><td><button class="del" data-id="${esc(r.id)}">削除</button></td></tr>`).join('')
+  }</tbody></table>`:'<div class="none">まだ記録はありません。ラベルを撮影して「この番号を記録」を押してください。</div>';
+}
+let pend=null;
+$('list').onclick=e=>{const b=e.target.closest('.del');if(!b)return;
+  if(pend!==b.dataset.id){pend=b.dataset.id;b.textContent='もう一度で削除';setTimeout(()=>{if(pend===b.dataset.id){pend=null;b.textContent='削除'}},2500);return}
+  recs=recs.filter(r=>String(r.id)!==pend);pend=null;store.set('lot.recs',recs);render();update();toast('削除しました')};
+$('copy').onclick=async()=>{
+  const q=s=>'"'+String(s??'').replace(/"/g,'""')+'"';
+  const d=s=>s?ymd(new Date(s)):'';
+  const csv=['日時,材料,区分,ロット番号（主剤）,製造日（主剤）,有効期限（主剤）,硬化剤ロット番号,製造日（硬化剤）,有効期限（硬化剤）,読み取り方法',...recs.slice().reverse().map(r=>{const a=r.e1||{},b=r.e2||{};return [fmtT(r.at),r.kind,r.two?'2液':'1液',r.code,d(a.mfg),d(a.exp),r.code2||'',d(b.mfg),d(b.exp),(HOW[r.how]||'')+(r.two?' / '+(HOW[r.how2]||''):'')].map(q).join(',')})].join('\n');
+  try{await navigator.clipboard.writeText(csv);toast('CSVをコピーしました')}catch(e){toast('コピーできませんでした')}
+};
+renderKinds();render();update();
+
+}
+</script>
+</body>
+</html>

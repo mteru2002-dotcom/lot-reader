@@ -1,0 +1,14 @@
+このツールは次のオープンソースソフトウェアを使用しています。
+
+- Tesseract.js 5.1.1 (tess/tesseract.min.js, tess/worker.min.js)
+  Apache License 2.0 — https://github.com/naptha/tesseract.js
+  ※ tess/worker.min.js の先頭に、辞書ファイル(eng.traineddata.b64.txt)を読み込むための短い処理を追加しています。
+- Tesseract.js-core 5.1.1 (tess/tesseract-core-*.wasm.js)
+  Apache License 2.0 — https://github.com/naptha/tesseract.js-core
+- Tesseract 英語学習データ 4.0.0_best_int (tess/eng.traineddata.b64.txt、base64形式に変換)
+  Apache License 2.0 — https://github.com/tesseract-ocr/tessdata_best
+  配布パッケージ @tesseract.js-data/eng は MIT License
+- ZXing TypeScript (@zxing/library) 0.21.3 (zxing.min.js)
+  Apache License 2.0 — https://github.com/zxing-js/library
+
+各ライセンス文はこのフォルダ内のファイルを参照してください。
